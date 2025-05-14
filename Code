@@ -1,0 +1,60 @@
+import ee
+import geemap
+import matplotlib.pyplot as plt
+
+# Initialize Earth Engine
+ee.Initialize()
+
+# Define Area of Interest (e.g., Lagos coastline)
+aoi = ee.Geometry.Rectangle([3.2, 6.3, 3.8, 6.6])
+
+# Function to calculate NDWI
+def get_ndwi(image):
+    ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI')  # For Sentinel-2
+    return image.addBands(ndwi)
+
+# Load and filter Sentinel-2 images for two different years
+def get_sentinel_image(year):
+    start = f'{year}-01-01'
+    end = f'{year}-12-31'
+    image = (ee.ImageCollection('COPERNICUS/S2_SR')
+             .filterBounds(aoi)
+             .filterDate(start, end)
+             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+             .median()
+             .clip(aoi))
+    return get_ndwi(image)
+
+# Get NDWI images for two years
+image_2016 = get_sentinel_image(2016).select('NDWI')
+image_2024 = get_sentinel_image(2024).select('NDWI')
+
+# Apply threshold to extract water masks
+def extract_water_mask(ndwi_image, threshold=0.3):
+    return ndwi_image.gt(threshold)
+
+water_mask_2016 = extract_water_mask(image_2016)
+water_mask_2024 = extract_water_mask(image_2024)
+
+# Visualize NDWI and shoreline changes
+Map = geemap.Map(center=[6.5, 3.5], zoom=10)
+Map.addLayer(image_2016, {'min': 0, 'max': 1, 'palette': ['white', 'blue']}, 'NDWI 2016')
+Map.addLayer(image_2024, {'min': 0, 'max': 1, 'palette': ['white', 'green']}, 'NDWI 2024')
+Map.addLayer(water_mask_2016.updateMask(water_mask_2016), {'palette': ['blue']}, 'Water 2016')
+Map.addLayer(water_mask_2024.updateMask(water_mask_2024), {'palette': ['green']}, 'Water 2024')
+Map.add_legend(title="Coastal Change NDWI", legend_dict={'2016 Water': 'blue', '2024 Water': 'green'})
+Map
+
+# Optional: Export the change detection image
+change = water_mask_2024.subtract(water_mask_2016).rename('Change')
+export_image = change.visualize(min=-1, max=1, palette=['red', 'white', 'green'])
+
+task = ee.batch.Export.image.toDrive(
+    image=export_image,
+    description='Coastal_Erosion_Change_2016_2024',
+    folder='CoastalErosion',
+    fileNamePrefix='coastal_change',
+    region=aoi,
+    scale=10
+)
+task.start()
