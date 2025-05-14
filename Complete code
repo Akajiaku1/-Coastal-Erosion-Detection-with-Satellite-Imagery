@@ -1,0 +1,86 @@
+# --------------------------------------------------------
+# COASTAL EROSION DETECTION WITH SATELLITE IMAGERY (NDWI)
+# --------------------------------------------------------
+
+import ee
+import geemap
+import matplotlib.pyplot as plt
+
+# Authenticate and initialize Earth Engine
+try:
+    ee.Initialize()
+except Exception as e:
+    ee.Authenticate()
+    ee.Initialize()
+
+# Define the Area of Interest (AOI) — Example: Lagos Coastline
+aoi = ee.Geometry.Rectangle([3.2, 6.3, 3.8, 6.6])  # You can modify this for your region
+
+# --------------------------
+# NDWI Calculation Function
+# --------------------------
+def get_ndwi(image):
+    # NDWI = (Green - NIR) / (Green + NIR)
+    ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI')  # Sentinel-2 bands
+    return image.addBands(ndwi)
+
+# -----------------------------
+# Load Sentinel-2 Image by Year
+# -----------------------------
+def get_sentinel_ndwi_image(year):
+    start_date = f'{year}-01-01'
+    end_date = f'{year}-12-31'
+    image = (ee.ImageCollection('COPERNICUS/S2_SR')
+             .filterBounds(aoi)
+             .filterDate(start_date, end_date)
+             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+             .median()
+             .clip(aoi))
+    return get_ndwi(image).select('NDWI')
+
+# --------------------------------
+# Extract Water Masks via NDWI
+# --------------------------------
+def extract_water_mask(ndwi_image, threshold=0.3):
+    return ndwi_image.gt(threshold)
+
+# --------------------------
+# Load Images for Two Years
+# --------------------------
+ndwi_2016 = get_sentinel_ndwi_image(2016)
+ndwi_2024 = get_sentinel_ndwi_image(2024)
+
+water_2016 = extract_water_mask(ndwi_2016)
+water_2024 = extract_water_mask(ndwi_2024)
+
+# -------------------------------
+# Change Detection: Erosion Map
+# -------------------------------
+change_map = water_2024.subtract(water_2016).rename('Shoreline_Change')
+
+# --------------------------------
+# Visualization with geemap
+# --------------------------------
+Map = geemap.Map(center=[6.5, 3.5], zoom=10)
+
+Map.addLayer(ndwi_2016, {'min': 0, 'max': 1, 'palette': ['white', 'blue']}, 'NDWI 2016')
+Map.addLayer(ndwi_2024, {'min': 0, 'max': 1, 'palette': ['white', 'green']}, 'NDWI 2024')
+
+Map.addLayer(water_2016.updateMask(water_2016), {'palette': ['blue']}, 'Water 2016')
+Map.addLayer(water_2024.updateMask(water_2024), {'palette': ['green']}, 'Water 2024')
+
+Map.addLayer(change_map.updateMask(change_map), 
+             {'min': -1, 'max': 1, 'palette': ['red', 'white', 'green']}, 
+             'Coastal Change (Red=Erosion, Green=Accretion)')
+
+# Add legend
+legend_dict = {
+    '2016 Water': 'blue',
+    '2024 Water': 'green',
+    'Erosion': 'red',
+    'No Change': 'white',
+    'Accretion': 'green'
+}
+Map.add_legend(title="Shoreline Change Map", legend_dict=legend_dict)
+
+Map
